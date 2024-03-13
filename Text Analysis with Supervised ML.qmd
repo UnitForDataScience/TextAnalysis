@@ -1,0 +1,608 @@
+---
+title: "Text Analysis with Supervised Machine Learning"
+format: html
+author: Namig Abbasov 
+editor: visual
+---
+
+```{r}
+rm(list = ls())
+#install.packages("stopwords", dependencies = TRUE)
+#install.packages("cowplot", dependencies = TRUE)
+#install.packages("quanteda", dependencies = TRUE)
+#install.packages("quanteda.textplots", dependencies = TRUE)
+#install.packages("quanteda.textstats", dependencies = TRUE)
+#install.packages("quanteda.corpus", dependencies = TRUE)
+#install.packages("gridExtra")
+if (!requireNamespace("e1071", quietly = TRUE)) {
+    install.packages("e1071")
+}
+
+library(quanteda)
+library(readtext)
+library(glmnet)
+library(gridExtra)
+library(caret) 
+library(pROC)
+library(plyr)
+library(dplyr)
+library(ROCR)
+library(e1071)
+library(ggplot2)
+```
+
+
+
+```{r}
+### Set Data Directory 
+
+setwd("/Users/namigabbasov/Desktop/Work/Workshops/Text Analysis 2")
+```
+```{r}
+### Example Corpus from R quanteda package 
+unga_2017_corpus <- quanteda.corpora::data_corpus_ungd2017
+union_corpus <- quanteda.corpora::data_corpus_sotu
+```
+
+
+```{r}
+### Load Text Data
+
+
+data_dir<-"/Users/namigabbasov/Desktop/Work/Workshops/Text Analysis 2/"
+
+ungd<- readtext(paste0(data_dir, "UNGD/*"), 
+                             docvarsfrom = "filenames", 
+                             dvsep="_", 
+                             docvarnames = c("ccodealp", "session", "year"))
+
+ungd<-subset(ungd, year>2015)
+```
+
+```{r}
+### Creating quanteda corpus 
+
+ungd_corpus <- corpus(ungd, text_field = "text")  
+summary(ungd_corpus)
+```
+```{r}
+### add a binary variable indicating which country is a eu member 
+eu_members <- c(
+    "AUT", # Austria
+    "BEL", # Belgium
+    "BGR", # Bulgaria
+    "HRV", # Croatia
+    "CYP", # Cyprus
+    "CZE", # Czech Republic
+    "DNK", # Denmark
+    "EST", # Estonia
+    "FIN", # Finland
+    "FRA", # France
+    "DEU", # Germany
+    "GRC", # Greece
+    "HUN", # Hungary
+    "IRL", # Ireland
+    "ITA", # Italy
+    "LVA", # Latvia
+    "LTU", # Lithuania
+    "LUX", # Luxembourg
+    "MLT", # Malta
+    "NLD", # Netherlands
+    "POL", # Poland
+    "PRT", # Portugal
+    "ROU", # Romania
+    "SVK", # Slovakia
+    "SVN", # Slovenia
+    "ESP", # Spain
+    "SWE" # Sweden
+)
+
+docvars(ungd_corpus, "eu") <- ifelse(docvars(ungd_corpus, "ccodealp") %in% eu_members, 1, 0)
+```
+
+```{r}
+
+### add a binary variable indicating which country is an Organization for Islamic Cooperation member 
+
+oic_members<-c(
+    "AFG", # Afghanistan
+    "ALB", # Albania
+    "DZA", # Algeria
+    "AZE", # Azerbaijan
+    "BHR", # Bahrain
+    "BGD", # Bangladesh
+    "BEN", # Benin
+    "BRN", # Brunei Darussalam
+    "BFA", # Burkina Faso
+    "BDI", # Burundi
+    "CMR", # Cameroon
+    "TCD", # Chad
+    "COM", # Comoros
+    "COG", # Congo
+    "CIV", # Côte d'Ivoire
+    "DJI", # Djibouti
+    "EGY", # Egypt
+    "GNQ", # Equatorial Guinea
+    "ERI", # Eritrea
+    "ETH", # Ethiopia
+    "GAB", # Gabon
+    "GMB", # Gambia
+    "GIN", # Guinea
+    "GNB", # Guinea-Bissau
+    "GUY", # Guyana
+    "IDN", # Indonesia
+    "IRN", # Iran
+    "IRQ", # Iraq
+    "JOR", # Jordan
+    "KAZ", # Kazakhstan
+    "KWT", # Kuwait
+    "KGZ", # Kyrgyzstan
+    "LBN", # Lebanon
+    "LBY", # Libya
+    "MLI", # Mali
+    "MRT", # Mauritania
+    "MDV", # Maldives
+    "MAR", # Morocco
+    "MOZ", # Mozambique
+    "NER", # Niger
+    "NGA", # Nigeria
+    "OMN", # Oman
+    "PAK", # Pakistan
+    "PSE", # Palestine
+    "QAT", # Qatar
+    "SAU", # Saudi Arabia
+    "SEN", # Senegal
+    "SLE", # Sierra Leone
+    "SOM", # Somalia
+    "SSD", # South Sudan
+    "SDN", # Sudan
+    "SUR", # Suriname
+    "SYR", # Syria
+    "TJK", # Tajikistan
+    "TZA", # Tanzania
+    "TGO", # Togo
+    "TUN", # Tunisia
+    "TUR", # Turkey
+    "TKM", # Turkmenistan
+    "UGA", # Uganda
+    "ARE", # United Arab Emirates
+    "UZB", # Uzbekistan
+    "YEM" # Yemen
+)
+
+
+docvars(ungd_corpus, "oic") <- ifelse(docvars(ungd_corpus, "ccodealp") %in% oic_members, 1, 0)
+```
+
+
+
+
+```{r}
+### Plot Three Key Terms from 2021-2022
+
+
+# 2021
+dfm_corpus_2021 <- dfm(tokens(corpus_subset(ungd_corpus, year == 2021)))    ### Create a DFM for the subset of UNGD corpus  
+terms_of_interest <- c("democracy", "ukraine", "war")          
+dfm_subset <- dfm_select(dfm_corpus_2021, pattern = terms_of_interest)      ### Subset the DFM for the terms of interest
+document_sums <- rowSums(dfm_subset)                                        ### Sum the term frequencies for each document and select the top 20
+top_20_indices <- order(document_sums, decreasing = TRUE)[1:20]        
+top_20_docs <- docnames(dfm_corpus_2021)[top_20_indices]
+corpus_top_20 <- corpus_subset(ungd_corpus, 
+                               docnames(ungd_corpus) %in% top_20_docs)      ### Subset the corpus for these top 20 documents
+
+
+kwic_democracy <- kwic(tokens(corpus_top_20), pattern = "democracy")        ### Generate the textplot_xray() for the top 20 documents
+kwic_freedom <- kwic(tokens(corpus_top_20), pattern = "ukraine")
+kwic_war <- kwic(tokens(corpus_top_20), pattern = "war")
+
+p1<-textplot_xray(kwic_democracy, scale = "absolute")                       ### Visualize the KWIC occurrences for each term from the top 20 documents
+p2<-textplot_xray(kwic_freedom, scale = "absolute")
+p3<-textplot_xray(kwic_war, scale = "absolute")
+
+
+# 2022
+dfm_corpus <- dfm(tokens(corpus_subset(ungd_corpus, year == 2022)))       ### Create a DFM for the subset of UNGD corpus  
+terms_of_interest <- c("democracy", "ukraine", "war")          
+dfm_subset <- dfm_select(dfm_corpus, pattern = terms_of_interest)         ### Subset the DFM for the terms of interest\
+document_sums <- rowSums(dfm_subset)                                      ### Sum the term frequencies for each document and select the top 20
+top_20_indices <- order(document_sums, decreasing = TRUE)[1:20]        
+top_20_docs <- docnames(dfm_corpus)[top_20_indices]
+corpus_top_20 <- corpus_subset(ungd_corpus, 
+                               docnames(ungd_corpus) %in% top_20_docs)    ### Subset the corpus for these top 20 documents
+kwic_democracy <- kwic(tokens(corpus_top_20), pattern = "democracy")      ### Generate the textplot_xray() for the top 20 documents
+kwic_freedom <- kwic(tokens(corpus_top_20), pattern = "ukraine")
+kwic_war <- kwic(tokens(corpus_top_20), pattern = "war")
+
+p4<-textplot_xray(kwic_democracy, scale = "absolute")                       ### Visualize the KWIC occurrences for each term from the top 20 documents
+p5<-textplot_xray(kwic_freedom, scale = "absolute")
+p6<-textplot_xray(kwic_war, scale = "absolute")
+
+
+grid.arrange(p1, p4, p2, p5, p3, p6, ncol=2)                                ### putting in grid 
+```
+
+
+
+
+# Preprocessing Corpus
+```{r}
+
+### Tokenization with punctuation, symbols, numbers, URLs, and separators removal
+ungd_tokens <- tokens(ungd_corpus,
+                      what = "word",
+                      remove_punct = TRUE,
+                      remove_symbols = TRUE,
+                      remove_numbers = TRUE,
+                      remove_url = TRUE,
+                      remove_separators = TRUE)
+
+### Remove stop words
+ungd_tokens_nostop<- tokens_remove(ungd_tokens, 
+                            stopwords("en"), padding = FALSE) # padding sets placeholder
+
+
+### Stemming
+ungd_clean<- tokens_wordstem(ungd_tokens_nostop, language = "en")
+
+
+### Explore Key Words in Context
+kwic(ungd_tokens, "democracy", window=2)
+kwic(ungd_tokens, "ukraine", window=2)
+kwic(ungd_tokens, "war", window=2)
+```
+
+
+
+
+# Vectorization Corpus: Document Feature Matrix
+
+```{r}
+ungd_dfm<- dfm(ungd_clean, 
+               tolower = TRUE)                                      ### create DFM and lower the terms 
+
+
+ungd_dfm[10:15,]                                                    ### let's view it  
+
+
+ungd_df<-convert(ungd_dfm, 
+                 to = "data.frame")                                 ### view it as data frame 
+
+
+
+
+
+
+
+
+
+### Further prepossessing after creating DFM
+  
+#ungd_dfm <- dfm_remove(ungd_dfm, pattern = "[6- /+=@|&*^%$#].,")       ### Remove special characters and symbols
+#ungd_nosparse <- dfm_trim(ungd_dfm, min_count = 5)                     ### Remove sparse terms
+#ungd_dfm <- dfm_remove(ungd_dfm, pattern = "[[:digit:]]+")             ### Remove numbers
+#ungd_dfm<- dfm_remove(ungd_dfm, pattern = "[[:punct:]]")               ### Remove punctuation
+```
+
+
+```{r}
+### Word Clouds
+textplot_wordcloud(dfm_select(ungd_dfm, pattern = stopwords("english"), selection = "remove"), 
+                   rotation = .25, 
+                   max_words = 200,
+                   color = rev(RColorBrewer::brewer.pal(10, "RdBu")))
+```
+
+```{r}
+### group documents by country
+ungd_countries <- dfm_group(ungd_dfm, groups = ccodealp)
+
+### get our document variables to enter into regression
+ungd_cols<- docvars(ungd_countries)
+```
+
+```{r}
+###  create cosine similarity to US and Russia, speech similarity 
+
+library(quanteda.textstats)
+usa_cos_sim <- quanteda.textstats::textstat_simil(x = ungd_countries, 
+                                              y = ungd_countries["USA",], 
+                                              margin = "documents",
+                                              method = "cosine")
+
+rus_cos_sim <- quanteda.textstats::textstat_simil(x = ungd_countries, 
+                                              y = ungd_countries["RUS",], 
+                                              margin = "documents",
+                                              method = "cosine")
+
+
+### create a new column in doc variables
+ungd_cols$usa_cos_sim <- usa_cos_sim[,1]
+
+ungd_cols$rus_cos_sim <- rus_cos_sim[,1]
+```
+
+# Modeling 
+
+## OLS Regression 
+```{r}
+### fit model 
+
+ols<- lm(usa_cos_sim ~ oic+eu, data = ungd_cols)
+summary(ols)
+```
+```{r}
+### Plot Predictive mean in OLS Regression 
+
+library(ggplot2)
+
+new_data <- expand.grid(oic = c(0, 1), eu = c(0, 1))            ### create new data
+new_data$predicted_mean <- predict(ols, newdata = new_data)     ### calculate predictive means
+
+
+ggplot(new_data, aes(x = factor(oic), y = predicted_mean, fill = factor(oic))) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(x = "OIC Membership", y = "Predictive Mean of USA Cosine Similarity") +
+  theme_minimal() +
+  scale_fill_manual(values = c("blue", "red"), 
+                    name = "OIC Membership",
+                    labels = c("No", "Yes"))  
+
+
+
+ggplot(new_data, aes(x = factor(eu), y = predicted_mean, fill = factor(eu))) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(x = "EU Membership", y = "Predictive Mean of USA Cosine Similarity") +
+  theme_minimal() +
+  scale_fill_manual(values = c("blue", "red"), 
+                    name = "EU Membership",
+                    labels = c("No", "Yes"))
+
+```
+## Logistic Regression
+```{r}
+### Logistic Regression 
+
+logit1<- glm(eu~ rus_cos_sim+usa_cos_sim, data =ungd_cols, family = "binomial")
+summary(logit1)
+
+logit2<- glm(oic~ rus_cos_sim+usa_cos_sim, data =ungd_cols, family = "binomial")
+summary(logit2)
+```
+## LASSO
+```{r}
+
+### slit data 
+
+set.seed(123)  ### Set a seed for reproducibility
+
+ungd_columns<- docvars(ungd_dfm) ### get columns 
+
+
+trainIndex <- createDataPartition(ungd_columns$oic, p = 0.70, list = FALSE) # Create a partition to split data based on 'oic'
+
+### Split the document term matrix into training and test sets
+train_dtm <- ungd_dfm[trainIndex, ]
+test_dtm <- ungd_dfm[-trainIndex, ]
+
+### Split original data for corresponding labels
+train_data <- ungd_columns[trainIndex, ]
+test_data <- ungd_columns[-trainIndex, ]
+```
+
+```{r}
+### Fit lasso 
+
+x_train <- as.matrix(train_dtm) ### convert document-term matrix for training set to a matrix
+y_train <- train_data$oic ### binary outcome vector for the training set
+
+
+cv_lasso <- cv.glmnet(x = x_train,      ### Run cross-validated LASSO
+                         y = y_train,
+                         family = "binomial",
+                         type.measure = "class",
+                         alpha = 1)    ### LASSO 
+
+
+cat("Best lambda: ", cv_lasso$lambda.min, "\n") ### Print best lambda value
+
+ 
+plot(cv_lasso)              ### plot cross-validation curve
+```
+```{r}
+### Prepare the test matrix
+x_test <- as.matrix(test_dtm)
+
+### Predict on the test set using the best lambda
+predictions <- predict(cv_lasso, newx = x_test, s = "lambda.min", type = "response")
+
+### Convert predictions to binary class, if necessary
+predicted_class <- ifelse(predictions > 0.5, 1, 0)
+```
+
+```{r}
+### confusion matrix
+conf_matrix <- confusionMatrix(as.factor(predicted_class), as.factor(test_data$oic), positive ="1")
+
+### Print the confusion matrix
+print(conf_matrix)
+```
+```{r}
+### plot confusion matrix 
+
+library(vcd)
+fourfoldplot(conf_matrix$table, color = c("#CC6666", "#9999CC"), conf.level = 0, margin = 1)
+```
+```{r}
+### plot confusion matrix 
+
+conf_matrix_long <- as.data.frame(as.table(conf_matrix$table))
+
+# Plot the confusion matrix
+ggplot(data = conf_matrix_long, aes(x = Reference, y = Prediction, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%d", Freq)), vjust = 1) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(x = "Actual Class", y = "Predicted Class", fill = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+## Ridge Regression 
+```{r}
+### Run cross-validated ridge regression
+cv_ridge <- cv.glmnet(x = x_train, 
+                      y = y_train,
+                      family = "binomial",
+                      type.measure = "class",
+                      alpha = 0)   ### Setting alpha to 0 specifies ridge regression
+
+
+cat("Best lambda: ", cv_ridge$lambda.min, "\n") ### Print the best lambda value
+
+
+plot(cv_ridge)  ### plot the cross-validation curve
+
+```
+
+```{r}
+### Prepare the test matrix
+x_test <- as.matrix(test_dtm)
+
+### Predict on the test set using the best lambda
+preds_ridge<- predict(cv_ridge, newx = x_test, s = "lambda.min", type = "response")
+
+### Convert predictions to binary class
+preds_class_ridge<- ifelse(preds_ridge > 0.5, 1, 0)
+```
+
+```{r}
+### confusion matrix
+conf_matrix_ridge <- confusionMatrix(as.factor(preds_class_ridge), as.factor(test_data$oic), positive ="1")
+
+### Print the confusion matrix
+print(conf_matrix_ridge)
+```
+
+```{r}
+### plot confusion matrix 
+
+library(vcd)
+fourfoldplot(conf_matrix_ridge$table, color = c("#CC6666", "#9999CC"), conf.level = 0, margin = 1)
+```
+
+```{r}
+### plot confusion matrix 
+
+conf_matrix_table <- as.data.frame(as.table(conf_matrix_ridge$table))
+
+
+ggplot(data = conf_matrix_table, aes(x = Reference, y = Prediction, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%d", Freq)), vjust = 1) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(x = "Actual Class", y = "Predicted Class", fill = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Support Vector Machine(SVM) 
+```{r}
+
+### Fit SVM model
+svm_model <- svm(x = x_train, y = y_train, probability = TRUE, type = 'C-classification', kernel = 'radial')
+
+```
+
+```{r}
+### make predictions 
+
+svm_preds <- predict(svm_model, x_test, probability = TRUE)
+
+svm_preds_prob <- attr(svm_preds, "probabilities")[,2]        ### Obtain the class probabilities for the positive class
+
+ 
+svm_preds_class <- ifelse(svm_preds_prob > 0.5, 1, 0)         ### Convert probabilities to binary class
+
+```
+
+
+```{r}
+### Confusion matrix
+
+conf_matrix_svm <- confusionMatrix(as.factor(svm_preds_class), as.factor(test_data$oic), positive = "1") ### get confusion matrix 
+
+### Print the confusion matrix
+print(conf_matrix_svm)
+
+```
+```{r}
+### plot confusion matrix 
+
+## Fourfold plot
+fourfoldplot(conf_matrix_svm$table, color = c("#CC6666", "#9999CC"), conf.level = 0, margin = 1)
+
+### Heatmap plot
+conf_matrix_table_svm <- as.data.frame(as.table(conf_matrix_svm$table))
+
+### Plot the confusion matrix using ggplot2
+ggplot(data = conf_matrix_table_svm, aes(x = Reference, y = Prediction, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%d", Freq)), vjust = 1) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(x = "Actual Class", y = "Predicted Class", fill = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## KNN
+```{r}
+library(class)
+
+### Scale the data
+x_train_scaled <- scale(x_train)
+x_test_scaled <- scale(x_test, center = attr(x_train_scaled, "scaled:center"), 
+                       scale = attr(x_train_scaled, "scaled:scale"))
+```
+
+```{r}
+### Set k
+
+k <- 5
+
+### Predict using KNN
+preds_knn <- knn(train = x_train_scaled, test = x_test_scaled, cl = y_train, k = k)
+```
+
+```{r}
+library(caret)
+
+### Confusion matrix
+conf_matrix_knn <- confusionMatrix(preds_knn, as.factor(test_data$oic))
+
+### Print the confusion matrix
+print(conf_matrix_knn)
+```
+
+```{r}
+### Fourfold plot
+library(vcd)
+fourfoldplot(conf_matrix_knn$table, color = c("#CC6666", "#9999CC"), conf.level = 0, margin = 1)
+
+### Heatmap plot
+conf_matrix_table_knn <- as.data.frame(as.table(conf_matrix_knn$table))
+
+### Plot the confusion matrix
+library(ggplot2)
+ggplot(data = conf_matrix_table_knn, aes(x = Reference, y = Prediction, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%d", Freq)), vjust = 1) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(x = "Actual Class", y = "Predicted Class", fill = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+
+
